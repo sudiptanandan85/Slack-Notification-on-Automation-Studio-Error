@@ -1,0 +1,107 @@
+<script runat="server">
+    Platform.Load("Core", "1");
+  /* ======================================================= */
+  /* ======================== Config ======================= */
+  var authurl = "authmarketingcloudapiscom/"; //Get this from Setup
+  var client_id = "xxxxxxxxxxxxxxxxx"; //Get this from Setup
+  var client_secret = "yyyyyyyyyyyyyyy"; //Get this from Setup
+  var slackwebhook = "zzzzzzzzzzzzzzzzzzzzz"; //Get this from Slack API
+  var gtm = 10; //This is your GMT modifier for your timezone
+  var notify = "@channel"; //use this to notify the channel or specific people
+  /* ======================================================= */
+  
+  var detail = {};
+  var method = {"303":"ActivityModal","300":"ActivityDetails","73":"ActivityModal","53":"ActivityDetails","43":"ActivityDetails","423":"ActivityModal"};
+  var tokenObj = gettoken();
+  var accessToken = tokenObj.access_token;
+  var auth = "Bearer " + accessToken;
+  var rest_instance_url = tokenObj.rest_instance_url;
+  var stackid = getstackid();
+  var automation = GetAutomations();
+  if (automation > 0) {
+    var errorjson = GetAutomationError(automation);
+    if (method[errorjson.objectTypeId]) {
+      var activity = "<https://mc."+stackid+".marketingcloudapps.com/AutomationStudioFuel3/?hub=1#"+method[errorjson.objectTypeId]+"/"+errorjson.objectTypeId+"/"+errorjson.activityObjectId+"|"+errorjson.objectname+">";
+    } else {
+      var activity = errorjson.objectname;
+    };
+    var message = { "blocks": [ { "type": "header", "text": { "type": "plain_text", "text": ":red_circle: "+detail.name+" (Errored)", "emoji": true } }, { "type": "section", "text": { "type": "mrkdwn", "text": "*When*: "+errorjson.statusLastUpdate+"\n*Activity*: "+activity+"\n*Step*: "+detail.process+"\n*Error*: `"+errorjson.translatedMsg+"`\n*Notify*: "+notify } }, { "type": "section", "text": { "type": "mrkdwn", "text": "<https://mc."+stackid+".exacttarget.com/cloud/#app/Automation%20Studio/AutomationStudioFuel3/%23Instance/"+automation+"/activity|Link to Automation>" } } ] };
+    Write(Stringify({ "blocks": [ { "type": "header", "text": { "type": "plain_text", "text": "Error Found", "emoji": true } } ] }))
+    slackmessage(message);
+  } else {
+    Write(Stringify({ "blocks": [ { "type": "header", "text": { "type": "plain_text", "text": "No Errors Found", "emoji": true } } ] }))
+  }
+  
+  function gettoken() {
+    var payload = {"grant_type":"client_credentials", "client_id":client_id, "client_secret":client_secret};
+    var OAuth2URL = authurl+"v2/token";
+    var accessTokenResult = HTTP.Post(OAuth2URL, 'application/json', Stringify(payload));
+    return Platform.Function.ParseJSON(accessTokenResult["Response"][0]);
+  }
+  
+  function getstackid() {
+    var url = authurl+"v2/userinfo";
+    var response = HTTP.Get(url, ["Authorization"], [auth]);
+    var res = Platform.Function.ParseJSON(response.Content);
+    return res.organization.stack_key;
+  }
+  
+  function GetAutomations() {
+    var response = HTTP.Get(rest_instance_url+'legacy/v1/beta/automations/automation/definition/?$top=50&$skip=0&$sort=lastRunTime%20desc&view=gridView', ["Authorization"], [auth]);
+    var json = Platform.Function.ParseJSON(response.Content);
+    var a = 0;
+    var errorid = 0;
+    do {
+      if (json.entry[a].lastRunStatus == "Error") {
+        errorid = json.entry[a].id;
+      } else {
+        a++;
+      }
+    }
+    while (errorid == 0 && a < json.entry.length);
+    return errorid;
+  }
+  
+  function GetAutomationError(definition) {
+    var Tomorrow = new Date(); 
+    Tomorrow.setDate(Tomorrow.getDate()+1);
+    var Yesterday = new Date();
+    Yesterday.setDate(Yesterday.getDate()-1);
+    var Tomorrow_string = Tomorrow.getFullYear()+'-'+("0"+(Tomorrow.getMonth()+1)).slice(-2)+'-'+Tomorrow.getDate();
+    var Yesterday_string = Yesterday.getFullYear()+'-'+("0"+(Yesterday.getMonth()+1)).slice(-2)+'-'+Yesterday.getDate();
+
+    var url = rest_instance_url+'legacy/v1/beta/automations/automation/instance/?definition_id='+definition+'&$top=1&begin_date='+Yesterday_string+'&end_date='+Tomorrow_string+'&order_by=StartTime%20desc&to_server_time=1';
+    var response = HTTP.Get(url, ["Authorization"], [auth]);
+    var json = Platform.Function.ParseJSON(response.Content);
+
+    for (p = 0; p < json.entry[0].processes.length; p++) {
+      if (json.entry[0].processes[p].status == "Error") {
+        detail.name = json.entry[0].name;
+        detail.process = p+1;
+        var process = json.entry[0].processes[p].id;
+        var processurl = rest_instance_url+'legacy/v1/beta/automations/worker/instance/?process_instance_id='+process;
+        var processresponse = HTTP.Get(processurl, ["Authorization"], [auth]);
+        var processjson = Platform.Function.ParseJSON(processresponse.Content);
+
+        for (w = 0; w < processjson.entry.length; w++) {
+          if (processjson.entry[w].statusMessage == "Error") {
+            var translatedMsg = processjson.entry[w].error.translatedMsg;
+            var activityObjectId = processjson.entry[w].activityObjectId;
+            var objectTypeId = processjson.entry[w].objectTypeId;
+            var objectname = processjson.entry[w].name;
+            var statusLastUpdate = new Date(processjson.entry[w].statusLastUpdate); 
+            statusLastUpdate.setHours(statusLastUpdate.getHours()+gtm+(statusLastUpdate.getTimezoneOffset()/60));
+            var statusLastUpdate_string = statusLastUpdate.toLocaleString("en-AU", {timeZone: 'Australia/Sydney'})
+          }
+        }
+      }
+    }
+    return {"translatedMsg": translatedMsg, "objectname": objectname, "statusLastUpdate": statusLastUpdate_string, "activityObjectId": activityObjectId, "objectTypeId": objectTypeId}
+  }
+  
+  function slackmessage(message) {
+    var result = HTTP.Post(slackwebhook, 'application/json', Stringify(message), [], []);
+  }
+    
+  } 
+</script>
