@@ -1,0 +1,7 @@
+%%[
+SET @payload = '{"text":"Hello from SFMC Ampscript!"}'
+SET @post = HTTPPOST2('https://hooks.slack.com/services/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','text/plain',@payload,true,@output,@header)
+]%%
+@post= %%=v(@post)=%% <br>
+@output= %%=v(@output)=%% <br>
+@header= %%=v(@header)=%% <br>
